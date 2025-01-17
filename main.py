@@ -63,7 +63,7 @@ for repo_name in repositories:
             f"Inspecting Deployment {name} of branch {branch} ({statuses[0].state})- Last Updated ({updated_at})"
         )
 
-        if branch == "master" or "stable/" in branch:
+        if branch == "master" or "main" or "stable/" in branch:
             # Assumption: The first status in the array defines the current status of a deployment
             if statuses[0].state != "inactive":
                 print("Ignoring active stable / master deployment")
