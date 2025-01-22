@@ -1,26 +1,25 @@
 import os
+import logging
 from github import Github
 from github import Auth
 from github import GithubException
 from datetime import datetime
 import requests
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 
 def delete_deployment(repo, id):
+    logger.info("Deleting deployemnt %s for repo %s", id, repo)
     resp = requests.delete(
         f"https://api.github.com/repos/{repo}/deployments/{id}",
         headers={"Authorization": f"Bearer {API_KEY}"},
     )
-    print(resp.text)
-    return resp.status_code
-
-
-def delete_environment(repo, environment_name):
-    resp = requests.delete(
-        f"https://api.github.com/repos/{repo}/environments/{environment_name}",
-        headers={"Authorization": f"Bearer {API_KEY}"},
-    )
-    print(resp.text)
+    logger.debug("Response code: %d", resp.status_code)
     return resp.status_code
 
 
@@ -31,15 +30,14 @@ API_KEY = os.getenv("GH_APP_TOKEN")
 if API_KEY is None:
     raise ValueError("Please define API_KEY as environment var!")
 
-DELETE_ENVIRONMENTS = os.getenv("DELETE_ENVIRONMENTS") or None
-
 repositories = [
-    "camunda/operate",  # Operate
-    "camunda/cawemo",  # Cawemo
-    "camunda/camunda",  # Monorepo
-    "camunda/camunad-optimize",  # Optimize
-    "camunda/tasklist",  # Task-list
-    "camunda/web-modeler",  # Web-modeler
+    "Kerruba/poc-delete-inactive-github-environments"
+    # "camunda/operate",  # Operate
+    # "camunda/cawemo",  # Cawemo
+    # "camunda/camunda",  # Monorepo
+    # "camunda/camunad-optimize",  # Optimize
+    # "camunda/tasklist",  # Task-list
+    # "camunda/web-modeler",  # Web-modeler
 ]
 
 # Authenticate with GitHub API
@@ -47,6 +45,7 @@ auth = Auth.Token(API_KEY)
 g = Github(auth=auth)
 
 for repo_name in repositories:
+    logger.info("Processing deployments for repository %s", repo_name)
 
     repo = g.get_repo(repo_name)
 
@@ -56,52 +55,49 @@ for repo_name in repositories:
     for depo in deployments:
         branch = depo.ref
         name = depo.environment
-        updated_at = depo.updated_at
-        now = datetime.now()
-        statuses = depo.get_statuses()
-        print(
-            f"Inspecting Deployment {name} of branch {branch} ({statuses[0].state})- Last Updated ({updated_at})"
+        last_state = depo.get_statuses()[0].state
+        logger.debug(
+            f"Inspecting Deployment {name} of branch {branch} ({last_state})- Last Updated ({depo.updated_at})"
         )
 
-        if branch == "master" or "main" or "stable/" in branch:
+        if branch in ("master", "main") or branch.startswith("stable/"):
             # Assumption: The first status in the array defines the current status of a deployment
-            if statuses[0].state != "inactive":
-                print("Ignoring active stable / master deployment")
+            if last_state != "inactive":
+                logger.info("Ignoring %s main / master / stable deployment", last_state)
                 count["active"] += 1
                 continue
             else:
-                print("Deleting inactive stable / master deployment")
-                delete_deployment(repo_name, depo.id)
-                count["deleted"] += 1
+                logger.info("Deleting %s main / master / stable deployment", last_state)
+                status_code = delete_deployment(repo_name, depo.id)
+                logger.info("Deleted deployment with status code %d", status_code)
         else:
-            print(f"Checking whether branch {branch} still exists")
+            logger.info("Checking whether branch %s still exists", branch)
             try:
                 repo.get_branch(branch=branch)
-                print("Branch still exists - not deleting deployment")
+                logger.info("Branch %s still exists - not deleting deployment", branch)
                 count["active"] += 1
                 continue
-            except GithubException:
-                print(f"GitHub branch {branch} doesnt exist anymore")
-                print(f"Deleting GH Deployment - {name}")
+            except GithubException as e:
+                if e.status == 404:
+                    logger.warning(f"GitHub branch {branch} doesnt exist anymore")
+                    logger.info(f"Deleting GH Deployment - {name}")
 
-                status_code = delete_deployment(repo_name, depo.id)
+                    status_code = delete_deployment(repo_name, depo.id)
 
-                # 422 - We cannot delete an active deployment unless it is the only deployment in a given environment.
-                if status_code == 422:
-                    depo.create_status(state="inactive", auto_inactive=True)
-                    delete_deployment(repo_name, depo.id)
-                    count["deactivated"] += 1
+                    # 422 - We cannot delete an active deployment unless it is the only deployment in a given environment.
+                    if status_code == 422:
+                        logger.warning("Deployment is active - deactivating")
+                        depo.create_status(state="inactive", auto_inactive=True)
+                        delete_deployment(repo_name, depo.id)
 
-                if DELETE_ENVIRONMENTS == "true":
-                    environment_name = depo.environment
-                    print(f"Deleting GH Environment - {environment_name}")
-                    delete_environment(repo_name, environment_name)
+                    count["deleted"] += 1
+                else:
+                    logger.warning("GET branch %s response code: %d", branch, e.status)
 
-                count["deleted"] += 1
-
-        print(f"Finished processing deployments for repository {repo_name}")
-        print("========================================")
-        print("Summary:")
-        print("Active Deployments: ", count["active"])
-        print("Deleted Deployments: ", count["deleted"])
-        print("Deactivated Deployments: ", count["deactivated"])
+    logger.info("========================================")
+    logger.info("Finished processing deployments for repository %s", repo_name)
+    logger.info("========================================")
+    logger.info("Summary:")
+    logger.info("Active Deployments: %d", count["active"])
+    logger.info("Deleted Deployments: %d", count["deleted"])
+    logger.info("Deactivated Deployments: %d", count["deactivated"])
