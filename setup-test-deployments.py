@@ -35,8 +35,10 @@ logger.info(f"Preparing repository {repo_name} for testing")
 logger.info("Cleaning up all existing deployments")
 deployments = repo.get_deployments()
 for d in deployments:
+    logger.info("Deactivating deployment %s for branch %s", d.id, d.ref)
     d.create_status("inactive", description="Inactive")
     status_code = delete_deployment(repo_name, d.id)
+    logger.info("Deleted deployment %s with status code %s", d.id, status_code)
 
 # Create deployments/environments for existing branches
 test_dep_tuples = [
@@ -54,9 +56,10 @@ for t in test_dep_tuples:
     env = t[1]
     description = t[2]
     state = t[3]
+    logger.info("Creating '%s' deployment (status=%s) for branch %s", env, state, ref)
     d = repo.create_deployment(ref=ref, environment=env, description=description)
     d.create_status(state)
-    logger.info("Created '%s' deployment (status=%s) for branch %s", env, state, ref)
+    logger.info("Done")
 
 # Create deployments/environments for deleted branches
 logger.info("Simulating deployment for delete branch")
