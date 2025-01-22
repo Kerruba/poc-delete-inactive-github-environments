@@ -1,7 +1,7 @@
 import os
 import logging
 import requests
-from github import Github
+from github import Github, GithubException
 from github import Auth
 
 logging.basicConfig(
@@ -28,16 +28,17 @@ if API_KEY is None:
 auth = Auth.Token(API_KEY)
 g = Github(auth=auth)
 repo_name = "Kerruba/poc-delete-inactive-github-environments"
-
-# Cleanup all deployments and start fresh
 repo = g.get_repo(repo_name)
+logger.info(f"Preparing repository {repo_name} for testing")
+
+
+logger.info("Cleaning up all existing deployments")
 deployments = repo.get_deployments()
 for d in deployments:
     d.create_status("inactive", description="Inactive")
     status_code = delete_deployment(repo_name, d.id)
-    print(status_code)
 
-
+# Create deployments/environments for existing branches
 test_dep_tuples = [
     ("main", "production", "stable", "success"),
     ("feat1", "feat1_preview_env", "Preview environments for feat1 branch", "inactive"),
@@ -48,7 +49,6 @@ test_dep_tuples = [
         "success",
     ),
 ]
-
 for t in test_dep_tuples:
     ref = t[0]
     env = t[1]
@@ -56,4 +56,28 @@ for t in test_dep_tuples:
     state = t[3]
     d = repo.create_deployment(ref=ref, environment=env, description=description)
     d.create_status(state)
-    print(d)
+    logger.info("Created '%s' deployment (status=%s) for branch %s", env, state, ref)
+
+# Create deployments/environments for deleted branches
+logger.info("Simulating deployment for delete branch")
+main_ref = repo.get_git_ref("heads/main")
+try:
+
+    # Create branch
+    logger.info("Creating ref /refs/heads/feat2")
+    ref = repo.create_git_ref(ref="refs/heads/feat2", sha=main_ref.object.sha)
+
+    # Create deployment and set as inactive
+    logger.info("Creating inactive deployment for ref /refs/heads/feat2")
+    d = repo.create_deployment(
+        ref=ref.ref,
+        environment="feat2_preview_env",
+        description="Preview environment for feat2 branch",
+    )
+    d.create_status("inactive")
+    #
+    # Delete branch
+    logger.info("Deleting branch feat2")
+    ref.delete()
+except GithubException as e:
+    logger.error(e)
